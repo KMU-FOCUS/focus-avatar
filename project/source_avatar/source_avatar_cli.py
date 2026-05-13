@@ -15,7 +15,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from precompute_source_avatar_assets import build_source_asset, save_source_asset
+from .precompute_source_avatar_assets import build_source_asset, save_source_asset
 
 PROFILE_FILENAME = "profile.json"
 DEFAULT_SOURCE_PAD_RATIO = 0.35
