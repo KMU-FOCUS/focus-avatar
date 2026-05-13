@@ -13,11 +13,10 @@ import numpy as np
 import torch
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-SHARED_PY_DIR = ROOT_DIR / "shared" / "converters"
-if str(SHARED_PY_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_PY_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-from coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
+from shared.converters.coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
 
 MODULE_DIR = Path(__file__).resolve().parent
 CROP_SIZE = 256
@@ -55,7 +54,7 @@ def ensure_facemap_model() -> Any:
     except ImportError as exc:
         raise RuntimeError(
             "qai_hub_models is required. Install it first, for example:\n"
-            "pip install qai-hub-models torch opencv-converters scipy mediapipe"
+            "pip install qai-hub-models torch opencv-python scipy mediapipe"
         ) from exc
     model = FaceMap_3DMM.from_pretrained()
     model.eval()

@@ -1,7 +1,11 @@
+#!/usr/bin/env python3
+"""Precompute reusable source assets for Qualcomm metadata reenactment."""
+
 from __future__ import annotations
 
 # reenact에서 재사용할 source portrait 자산을 미리 계산하는 스크립트다.
-# 안정적인 얼굴 crop, 추론된 coefficient, source landmark를 한 번만 뽑아 아바타 json파일을 만든다.
+# 안정적인 얼굴 crop, 추론된 coefficient, source landmark를 한 번만 뽑아 두고,
+# 이후 실행에서 같은 portrait 분석을 반복하지 않게 한다.
 
 import argparse
 import json
@@ -12,7 +16,7 @@ import cv2
 import numpy as np
 
 try:
-    from source_avatar_prepare import (
+    from .source_avatar_prepare import (
         CROP_SIZE,
         coeff_to_crop_landmarks,
         crop_square,
@@ -72,6 +76,7 @@ def build_source_asset(
     source_pad_ratio: float = 0.35,
     landmarker_task: str | None = None,
 ) -> dict[str, Any]:
+    # source portrait 하나에 대한 핵심 precompute 단계다.
     # 1) portrait 로드
     # 2) 정사각형에 가까운 얼굴 bbox 결정
     # 3) crop 후 FaceMap 추론
@@ -117,6 +122,8 @@ def save_source_asset(
     asset: dict[str, Any],
     output_path: str | Path,
 ) -> dict[str, Any]:
+    # 이후 reenact 실행이 실제로 필요로 하는 값만 저장한다.
+    # 이 함수의 실제 산출물은 .npz 하나이며, 반환 summary는 호출부 로그용이다.
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -144,6 +151,8 @@ def save_source_asset(
 
 def main() -> None:
     args = parse_args()
+    # CLI 진입점은 의도적으로 작게 유지한다.
+    # 한 번 계산하고, 한 번 저장하고, 요약만 출력한다.
     asset = build_source_asset(
         source_image_path=args.source_image,
         mean_face_path=DEFAULT_MEAN_FACE_PATH,

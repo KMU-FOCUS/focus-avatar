@@ -16,15 +16,15 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-import metadata_bbox_utils as overlay_helpers
-from reenact_composite import composite_face
-from reenact_restore import load_gpen_keyframe_restorer
-from reenact_keyframe_cache import (
+from . import metadata_bbox_utils as overlay_helpers
+from .reenact_composite import composite_face
+from .reenact_restore import load_gpen_keyframe_restorer
+from .reenact_keyframe_cache import (
     build_frame_plans,
     build_keyframe_cache,
     resolve_causal_warp,
 )
-from reenact_assets_runtime import (
+from .reenact_assets_runtime import (
     discover_avatar_bank_entries,
     load_avatar_profile_by_id,
     load_json,

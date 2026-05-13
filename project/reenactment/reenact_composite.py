@@ -10,8 +10,8 @@ import cv2
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 
-import metadata_bbox_utils as overlay_helpers
-from reenact_assets_runtime import CROP_SIZE
+from . import metadata_bbox_utils as overlay_helpers
+from .reenact_assets_runtime import CROP_SIZE
 
 
 DEFAULT_CLONE_MODE = "alpha"
