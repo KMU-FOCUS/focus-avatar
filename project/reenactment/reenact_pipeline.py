@@ -12,6 +12,7 @@ import bisect
 import json
 import random
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -128,6 +129,31 @@ def probe_video_relative_pts_us(video_path: str | Path) -> list[int] | None:
     return [max(0, pts_us - start_pts_us) for pts_us in raw_pts_us]
 
 
+def probe_has_audio_stream(video_path: str | Path) -> bool:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "json",
+        str(video_path),
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        return False
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    stream_items = payload.get("streams")
+    return isinstance(stream_items, list) and len(stream_items) > 0
+
+
 def resolve_metadata_frame_index_for_video_time(
     current_video_us: int,
     sampled_metadata_indices: list[int],
@@ -164,6 +190,40 @@ def load_required_facemap_assets() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     shape_basis = np.load(FACEMAP_ASSET_PATHS["shapeBasis.npy"], allow_pickle=False)
     blendshape_basis = np.load(FACEMAP_ASSET_PATHS["blendShape.npy"], allow_pickle=False)
     return mean_face, shape_basis, blendshape_basis
+
+
+def remux_original_audio(
+    *,
+    video_only_path: str | Path,
+    source_video_path: str | Path,
+    output_video_path: str | Path,
+) -> tuple[bool, str | None]:
+    if not probe_has_audio_stream(source_video_path):
+        return False, "source video has no audio stream"
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_only_path),
+        "-i",
+        str(source_video_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        str(output_video_path),
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        return False, stderr or "ffmpeg remux failed"
+    return True, None
 
 
 def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
@@ -280,6 +340,16 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
     cap: cv2.VideoCapture | None = None
     writer: cv2.VideoWriter | None = None
     output_video_path = Path(args.output_video).expanduser().resolve()
+    final_output_video_path = output_video_path
+    final_output_video_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output_file = tempfile.NamedTemporaryFile(
+        prefix=f"{output_video_path.stem}_video_only_",
+        suffix=output_video_path.suffix or ".mp4",
+        dir=str(output_video_path.parent),
+        delete=False,
+    )
+    temp_output_file.close()
+    output_video_path = Path(temp_output_file.name)
     video_relative_pts_us = probe_video_relative_pts_us(args.video)
 
     # 아래 카운터들은 실행 결과를 간단히 요약하는 데 쓴다.
@@ -289,14 +359,13 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
     input_fps = 30.0
     width = 0
     height = 0
+    audio_remuxed = False
+    audio_remux_error: str | None = None
 
     try:
         cap = cv2.VideoCapture(args.video)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open video: {args.video}")
-
-        # 출력 경로가 아직 없으면 부모 폴더까지 만들어 둔다.
-        output_video_path.parent.mkdir(parents=True, exist_ok=True)
 
         # sampled frame만 저장하므로 output fps도 줄여서 계산한다.
         input_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -389,6 +458,18 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
         if writer is not None:
             writer.release()
 
+    try:
+        audio_remuxed, audio_remux_error = remux_original_audio(
+            video_only_path=output_video_path,
+            source_video_path=args.video,
+            output_video_path=final_output_video_path,
+        )
+        if not audio_remuxed:
+            output_video_path.replace(final_output_video_path)
+    finally:
+        if output_video_path.exists() and output_video_path != final_output_video_path:
+            output_video_path.unlink(missing_ok=True)
+
     # 실행 확인
     print(
         json.dumps(
@@ -397,8 +478,10 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                 "frames_composited": frames_composited,
                 "keyframes_computed": int(sum(len(v) for v in keyframe_indices_by_face.values())),
                 "gpen_load_error": gpen_load_error,
+                "audio_remuxed": audio_remuxed,
+                "audio_remux_error": audio_remux_error,
                 "pts_source": "ffprobe" if video_relative_pts_us is not None else "opencv_pos_msec",
-                "output_video": str(output_video_path),
+                "output_video": str(final_output_video_path),
             },
             ensure_ascii=False,
             indent=2,
