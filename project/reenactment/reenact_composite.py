@@ -10,20 +10,20 @@ import cv2
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 
-import metadata_bbox_utils as overlay_helpers
-from reenact_assets_runtime import CROP_SIZE
+from . import metadata_bbox_utils as overlay_helpers
+from .reenact_assets_runtime import CROP_SIZE
 
 
 DEFAULT_CLONE_MODE = "alpha"
 DEFAULT_ALPHA = 1.0
-DEFAULT_FEATHER_PX = 24
-DEFAULT_MASK_EXPAND_PX = 0
-DEFAULT_MASK_GAMMA = 0.8
+DEFAULT_FEATHER_PX = 36
+DEFAULT_MASK_EXPAND_PX = 6
+DEFAULT_MASK_GAMMA = 1.1
 DEFAULT_COLOR_MATCH = "lab"
 DEFAULT_COLOR_MATCH_STRENGTH = 0.45
-DEFAULT_COLOR_MATCH_EXPAND_PX = 0
+DEFAULT_COLOR_MATCH_EXPAND_PX = 4
 DEFAULT_COLOR_MATCH_DOWNSAMPLE = 1
-DEFAULT_OVERRIDE_MASK_BLUR_KSIZE = 9
+DEFAULT_OVERRIDE_MASK_BLUR_KSIZE = 15
 
 
 def _odd_kernel_size(radius_px: int) -> int:

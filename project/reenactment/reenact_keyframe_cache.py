@@ -2,29 +2,23 @@ from __future__ import annotations
 
 import bisect
 import random
-import sys
 from dataclasses import dataclass
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-SHARED_PY_DIR = ROOT_DIR / "shared" / "converters"
-if str(SHARED_PY_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_PY_DIR))
+from shared.converters.coeffs_to_landmark import reconstruct_qualcomm_68_landmarks
 
-import metadata_bbox_utils as overlay_helpers
-from coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
-from reenact_composite import warp_face
-from reenact_face_planner import (
+from . import metadata_bbox_utils as overlay_helpers
+from .reenact_composite import warp_face
+from .reenact_face_planner import (
     bbox_area,
     filter_faces,
     image_landmarks_to_crop_points,
 )
-from reenact_restore import restore_keyframe_face_region
-from reenact_assets_runtime import (
+from .reenact_restore import restore_keyframe_face_region
+from .reenact_assets_runtime import (
     coeff_to_pose_radians,
     load_avatar_view_assets,
     select_avatar_view,
@@ -37,16 +31,16 @@ from reenact_assets_runtime import (
 # 3. 렌더링 단계에서는 미리 만든 keyframe cache를 재사용하고, 필요한 경우 이전 keyframe과 현재 keyframe을 보간한다.
 # 이렇게 나누면 무거운 face warp 계산을 줄이면서도 프레임별 얼굴 위치와 avatar 선택을 안정적으로 유지할 수 있다.
 
-DEFAULT_BBOX_SCALE_X = 1.0
-DEFAULT_BBOX_SCALE_Y = 1.0
-DEFAULT_BBOX_SHIFT_X = 0
+DEFAULT_BBOX_SCALE_X = 1.06
+DEFAULT_BBOX_SCALE_Y = 1.06
+DEFAULT_BBOX_SHIFT_X = 4
 DEFAULT_BBOX_SHIFT_Y = 0
 DEFAULT_BBOX_SMOOTH_FACTOR = 0.65
 
-DEFAULT_PAD_LEFT = 0.02
-DEFAULT_PAD_RIGHT = 0.18
-DEFAULT_PAD_TOP = 0.08
-DEFAULT_PAD_BOTTOM = 0.18
+DEFAULT_PAD_LEFT = 0.08
+DEFAULT_PAD_RIGHT = 0.06
+DEFAULT_PAD_TOP = 0.16
+DEFAULT_PAD_BOTTOM = 0.04
 
 
 @dataclass(frozen=True)
