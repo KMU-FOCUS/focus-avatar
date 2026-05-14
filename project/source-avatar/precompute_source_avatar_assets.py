@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 # reenact에서 재사용할 source portrait 자산을 미리 계산하는 스크립트다.
-# 안정적인 얼굴 crop, 추론된 coefficient, source landmark를 한 번만 뽑아 아바타 json파일을 만든다.
+# 안정적인 얼굴 crop, 추론된 coefficient, source landmark를 한 번만 뽑아 두고,
+# 이후 실행에서 같은 portrait 분석을 반복하지 않게 한다.
 
 import argparse
 import json
@@ -12,7 +13,7 @@ import cv2
 import numpy as np
 
 try:
-    from source_avatar_prepare import (
+    from .source_avatar_prepare import (
         CROP_SIZE,
         coeff_to_crop_landmarks,
         crop_square,

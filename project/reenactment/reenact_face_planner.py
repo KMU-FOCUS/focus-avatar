@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from reenact_assets_runtime import CROP_SIZE
+from .reenact_assets_runtime import CROP_SIZE
 
 
 def bbox_area(face: Mapping[str, Any]) -> float:

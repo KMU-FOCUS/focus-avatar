@@ -79,6 +79,84 @@ def scale_box(
     )
 
 
+def collect_metadata_bbox_extent(frames: list[Any]) -> tuple[int, int]:
+    max_x2 = 0.0
+    max_y2 = 0.0
+    for frame in frames:
+        if not isinstance(frame, Mapping):
+            continue
+        for face in frame.get("faces") or []:
+            if not isinstance(face, Mapping):
+                continue
+            bbox = face.get("bbox")
+            if not isinstance(bbox, Mapping):
+                continue
+            try:
+                x = float(bbox.get("x", 0.0))
+                y = float(bbox.get("y", 0.0))
+                w = float(bbox.get("width", 0.0))
+                h = float(bbox.get("height", 0.0))
+            except (TypeError, ValueError):
+                continue
+            max_x2 = max(max_x2, x + w)
+            max_y2 = max(max_y2, y + h)
+    return int(round(max_x2)), int(round(max_y2))
+
+
+def infer_metadata_canvas_size(
+    frames: list[Any],
+    *,
+    video_w: int,
+    video_h: int,
+    explicit_width: int | None,
+    explicit_height: int | None,
+) -> tuple[int, int]:
+    if explicit_width is not None and explicit_height is not None:
+        return max(1, int(explicit_width)), max(1, int(explicit_height))
+
+    extent_w, extent_h = collect_metadata_bbox_extent(frames)
+    if explicit_width is not None:
+        return max(1, int(explicit_width)), max(1, extent_h, video_h)
+    if explicit_height is not None:
+        return max(1, extent_w, video_w), max(1, int(explicit_height))
+    if extent_w <= 0 or extent_h <= 0:
+        return max(1, int(video_w)), max(1, int(video_h))
+
+    candidate_sizes = [
+        (1920, 1080),
+        (2560, 1440),
+        (3840, 2160),
+        (1280, 720),
+    ]
+    video_aspect = float(video_w) / float(max(video_h, 1))
+    for candidate_w, candidate_h in candidate_sizes:
+        if extent_w <= candidate_w and extent_h <= candidate_h:
+            candidate_aspect = float(candidate_w) / float(candidate_h)
+            if abs(candidate_aspect - video_aspect) < 0.02:
+                return candidate_w, candidate_h
+
+    return max(extent_w, int(video_w)), max(extent_h, int(video_h))
+
+
+def remap_box_to_canvas(
+    box: tuple[int, int, int, int],
+    *,
+    source_w: int,
+    source_h: int,
+    target_w: int,
+    target_h: int,
+) -> tuple[int, int, int, int]:
+    scale_x = float(target_w) / float(max(source_w, 1))
+    scale_y = float(target_h) / float(max(source_h, 1))
+    x1, y1, x2, y2 = box
+    return (
+        int(round(x1 * scale_x)),
+        int(round(y1 * scale_y)),
+        int(round(x2 * scale_x)),
+        int(round(y2 * scale_y)),
+    )
+
+
 def extract_coeff_264(face: Mapping[str, Any]) -> np.ndarray | None:
     # Qualcomm FaceMap 3DMM metadata에서 tdmm_raw.coeffs를 꺼낸다.
     # downstream 함수들은 앞쪽 264개 coeff를 기준으로 landmark 복원/pose 계산을 수행한다.

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 
-from reenact_pipeline import run_keyframe_reenact_pipeline
+from .reenact_pipeline import run_keyframe_reenact_pipeline
 
 
 def parse_args() -> argparse.Namespace:
