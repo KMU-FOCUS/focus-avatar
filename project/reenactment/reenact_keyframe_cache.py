@@ -2,29 +2,23 @@ from __future__ import annotations
 
 import bisect
 import random
-import sys
 from dataclasses import dataclass
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-SHARED_PY_DIR = ROOT_DIR / "shared" / "converters"
-if str(SHARED_PY_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_PY_DIR))
+from shared.converters.coeffs_to_landmark import (reconstruct_qualcomm_68_landmarks)
 
-import metadata_bbox_utils as overlay_helpers
-from coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
-from reenact_composite import warp_face
-from reenact_face_planner import (
+from . import metadata_bbox_utils as overlay_helpers
+from .reenact_composite import warp_face
+from .reenact_face_planner import (
     bbox_area,
     filter_faces,
     image_landmarks_to_crop_points,
 )
-from reenact_restore import restore_keyframe_face_region
-from reenact_assets_runtime import (
+from .reenact_restore import restore_keyframe_face_region
+from .reenact_assets_runtime import (
     coeff_to_pose_radians,
     load_avatar_view_assets,
     select_avatar_view,
