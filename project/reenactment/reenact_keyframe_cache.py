@@ -8,7 +8,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from shared.converters.coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
+from shared.converters.coeffs_to_landmark import reconstruct_qualcomm_68_landmarks
+
 
 from . import metadata_bbox_utils as overlay_helpers
 from .reenact_composite import warp_face
@@ -31,16 +32,16 @@ from .reenact_assets_runtime import (
 # 3. 렌더링 단계에서는 미리 만든 keyframe cache를 재사용하고, 필요한 경우 이전 keyframe과 현재 keyframe을 보간한다.
 # 이렇게 나누면 무거운 face warp 계산을 줄이면서도 프레임별 얼굴 위치와 avatar 선택을 안정적으로 유지할 수 있다.
 
-DEFAULT_BBOX_SCALE_X = 1.0
-DEFAULT_BBOX_SCALE_Y = 1.0
-DEFAULT_BBOX_SHIFT_X = 0
+DEFAULT_BBOX_SCALE_X = 1.06
+DEFAULT_BBOX_SCALE_Y = 1.06
+DEFAULT_BBOX_SHIFT_X = 4
 DEFAULT_BBOX_SHIFT_Y = 0
 DEFAULT_BBOX_SMOOTH_FACTOR = 0.65
 
-DEFAULT_PAD_LEFT = 0.02
-DEFAULT_PAD_RIGHT = 0.18
-DEFAULT_PAD_TOP = 0.08
-DEFAULT_PAD_BOTTOM = 0.18
+DEFAULT_PAD_LEFT = 0.08
+DEFAULT_PAD_RIGHT = 0.06
+DEFAULT_PAD_TOP = 0.16
+DEFAULT_PAD_BOTTOM = 0.04
 
 
 @dataclass(frozen=True)

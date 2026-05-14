@@ -8,8 +8,10 @@ from __future__ import annotations
 # 6. warp된 얼굴을 원본 frame 위에 합성하고 output video로 저장한다.
 
 import argparse
+import bisect
 import json
 import random
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -50,6 +52,99 @@ def resolve_output_fps(input_fps: float, frame_step: int) -> float:
     # 출력 영상 fps 정하기
     base_fps = float(input_fps) if input_fps and input_fps > 0 else 30.0
     return max(base_fps / max(1, int(frame_step)), 1e-6)
+
+
+def build_sampled_metadata_pts_index(
+    raw_frames: list[Any],
+    *,
+    frame_step: int,
+) -> tuple[list[int], list[int]] | None:
+    # sampled metadata frame들에 대해 relative pts_us 인덱스를 만든다.
+    # pts_us가 빠진 frame이 하나라도 있으면 기존 frame_index 정렬로 fallback 한다.
+    sampled_indices = [frame_index for frame_index in range(len(raw_frames)) if should_process_frame_index(frame_index, frame_step)]
+    if not sampled_indices:
+        return None
+
+    sampled_pts_us: list[int] = []
+    for frame_index in sampled_indices:
+        frame = raw_frames[frame_index]
+        if not isinstance(frame, Mapping):
+            return None
+        pts_us = frame.get("pts_us")
+        if pts_us is None:
+            return None
+        try:
+            sampled_pts_us.append(int(pts_us))
+        except (TypeError, ValueError):
+            return None
+
+    start_pts_us = sampled_pts_us[0]
+    sampled_relative_pts_us = [max(0, pts_us - start_pts_us) for pts_us in sampled_pts_us]
+    return sampled_indices, sampled_relative_pts_us
+
+
+def probe_video_relative_pts_us(video_path: str | Path) -> list[int] | None:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "frame=best_effort_timestamp_time,pts_time,pkt_dts_time,pkt_pts_time",
+        "-of",
+        "json",
+        str(video_path),
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+
+    payload = json.loads(result.stdout)
+    frame_items = payload.get("frames")
+    if not isinstance(frame_items, list) or not frame_items:
+        return None
+
+    raw_pts_us: list[int] = []
+    for item in frame_items:
+        if not isinstance(item, Mapping):
+            return None
+        pts_us: int | None = None
+        for key in ("best_effort_timestamp_time", "pts_time", "pkt_dts_time", "pkt_pts_time"):
+            value = item.get(key)
+            if value in (None, "N/A"):
+                continue
+            try:
+                pts_us = int(round(float(value) * 1_000_000.0))
+            except (TypeError, ValueError):
+                pts_us = None
+            if pts_us is not None:
+                break
+        if pts_us is None:
+            return None
+        raw_pts_us.append(pts_us)
+
+    start_pts_us = raw_pts_us[0]
+    return [max(0, pts_us - start_pts_us) for pts_us in raw_pts_us]
+
+
+def resolve_metadata_frame_index_for_video_time(
+    current_video_us: int,
+    sampled_metadata_indices: list[int],
+    sampled_relative_pts_us: list[int],
+) -> int:
+    # 현재 비디오 시점과 가장 가까운 sampled metadata frame_index를 찾는다.
+    position = bisect.bisect_left(sampled_relative_pts_us, current_video_us)
+    if position <= 0:
+        return sampled_metadata_indices[0]
+    if position >= len(sampled_metadata_indices):
+        return sampled_metadata_indices[-1]
+
+    previous_pts_us = sampled_relative_pts_us[position - 1]
+    current_pts_us = sampled_relative_pts_us[position]
+    if abs(current_video_us - previous_pts_us) <= abs(current_pts_us - current_video_us):
+        return sampled_metadata_indices[position - 1]
+    return sampled_metadata_indices[position]
 
 
 def load_required_facemap_assets() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -159,6 +254,10 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
         avatar_rng=avatar_rng,
         should_process_frame_index=lambda frame_index: should_process_frame_index(frame_index, frame_step),
     )
+    metadata_pts_index = build_sampled_metadata_pts_index(
+        raw_frames,
+        frame_step=frame_step,
+    )
 
     # 2:
     # keyframe만 먼저 계산해서 cache에 저장한다.
@@ -181,11 +280,15 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
     cap: cv2.VideoCapture | None = None
     writer: cv2.VideoWriter | None = None
     output_video_path = Path(args.output_video).expanduser().resolve()
+    video_relative_pts_us = probe_video_relative_pts_us(args.video)
 
     # 아래 카운터들은 실행 결과를 간단히 요약하는 데 쓴다.
     frame_index = 0
     frames_sampled = 0
     frames_composited = 0
+    input_fps = 30.0
+    width = 0
+    height = 0
 
     try:
         cap = cv2.VideoCapture(args.video)
@@ -221,8 +324,23 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                 frame_index += 1
                 continue
 
-            # frame_plans는 해당 프레임에서 처리할 얼굴을 인지
-            plans_for_frame = frame_plans[frame_index] if frame_index < len(frame_plans) else []
+            # 현재 비디오 시간에 가장 가까운 metadata frame을 찾는다.
+            # ffprobe frame timestamp를 우선 사용하고, 없으면 기존 OpenCV POS_MSEC로 fallback 한다.
+            metadata_frame_index = frame_index
+            if metadata_pts_index is not None:
+                sampled_metadata_indices, sampled_relative_pts_us = metadata_pts_index
+                if video_relative_pts_us is not None and frame_index < len(video_relative_pts_us):
+                    current_video_us = int(video_relative_pts_us[frame_index])
+                else:
+                    current_video_us = int(round(max(0.0, cap.get(cv2.CAP_PROP_POS_MSEC)) * 1000.0))
+                metadata_frame_index = resolve_metadata_frame_index_for_video_time(
+                    current_video_us,
+                    sampled_metadata_indices,
+                    sampled_relative_pts_us,
+                )
+
+            # frame_plans는 해당 metadata 프레임에서 처리할 얼굴을 인지
+            plans_for_frame = frame_plans[metadata_frame_index] if metadata_frame_index < len(frame_plans) else []
             for plan in plans_for_frame:
                 # 같은 face_key에 대해 어떤 frame들이 keyframe인지와, 그 keyframe 계산 결과가 무엇인지 가져온다.
                 keyframe_indices = keyframe_indices_by_face.get(plan.face_key, [])
@@ -233,7 +351,7 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                 # 현재 frame에서 사용할 가장 적절한 keyframe 결과를 고른다.
                 # 필요하면 이전/현재 keyframe 결과를 transition_frames 만큼 섞는다.
                 warped = resolve_causal_warp(
-                    frame_index,
+                    metadata_frame_index,
                     keyframe_indices,
                     keyframe_cache,
                     transition_frames=transition_frames,
@@ -279,6 +397,7 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                 "frames_composited": frames_composited,
                 "keyframes_computed": int(sum(len(v) for v in keyframe_indices_by_face.values())),
                 "gpen_load_error": gpen_load_error,
+                "pts_source": "ffprobe" if video_relative_pts_us is not None else "opencv_pos_msec",
                 "output_video": str(output_video_path),
             },
             ensure_ascii=False,

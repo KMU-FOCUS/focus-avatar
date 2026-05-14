@@ -16,7 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from shared.converters.coeffs_to_arkit52 import reconstruct_qualcomm_68_landmarks
+from shared.converters.coeffs_to_landmark import reconstruct_qualcomm_68_landmarks
 
 MODULE_DIR = Path(__file__).resolve().parent
 CROP_SIZE = 256

@@ -143,8 +143,8 @@ def select_avatar_view(profile: Mapping[str, Any], yaw_radians: float) -> str:
     ):
         return "front"
 
-    left_min = float(view_select.get("left_yaw_min", 25.0))
-    right_max = float(view_select.get("right_yaw_max", -25.0))
+    left_min = float(view_select.get("left_yaw_min", 32.0))
+    right_max = float(view_select.get("right_yaw_max", -32.0))
     if yaw_degrees >= left_min and "left" in available_views:
         return "left"
     if yaw_degrees <= right_max and "right" in available_views:
