@@ -1,0 +1,89 @@
+{
+  "avatar_id": "avatar_004",
+  "name": "avatar_004",
+  "views": [
+    "front",
+    "left",
+    "right"
+  ],
+  "default_view": "front",
+  "view_select": {
+    "front_yaw_range": [
+      -25.0,
+      25.0
+    ],
+    "left_yaw_min": 25.0,
+    "right_yaw_max": -25.0
+  },
+  "assets": {
+    "front": {
+      "view": "front",
+      "image": "front.png",
+      "meta": "front_meta.npz",
+      "mask": "front_mask.png",
+      "bbox_xyxy": [
+        48.0,
+        66.0,
+        302.0,
+        320.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "front_meta_crop.png",
+      "bbox_preview": "front_meta_bbox.png"
+    },
+    "left": {
+      "view": "left",
+      "image": "left.png",
+      "meta": "left_meta.npz",
+      "mask": "left_mask.png",
+      "bbox_xyxy": [
+        59.0,
+        175.0,
+        760.0,
+        875.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "left_meta_crop.png",
+      "bbox_preview": "left_meta_bbox.png"
+    },
+    "right": {
+      "view": "right",
+      "image": "right.png",
+      "meta": "right_meta.npz",
+      "mask": "right_mask.png",
+      "bbox_xyxy": [
+        234.0,
+        173.0,
+        936.0,
+        875.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "right_meta_crop.png",
+      "bbox_preview": "right_meta_bbox.png"
+    }
+  }
+}
