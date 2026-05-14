@@ -1,0 +1,20 @@
+{
+  "output": "/content/output/avatar_bank/avatar_004/left_meta.npz",
+  "source_image": "/content/output/avatar_bank/avatar_004/left.png",
+  "source_bbox_xyxy": [
+    59.0,
+    175.0,
+    760.0,
+    875.0
+  ],
+  "crop_size": 256,
+  "source_points_shape": [
+    68,
+    2
+  ],
+  "source_coeff_shape": [
+    264
+  ],
+  "crop_preview": "/content/output/avatar_bank/avatar_004/left_meta_crop.png",
+  "bbox_preview": "/content/output/avatar_bank/avatar_004/left_meta_bbox.png"
+}

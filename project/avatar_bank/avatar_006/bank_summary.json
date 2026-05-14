@@ -1,0 +1,83 @@
+{
+  "bank_id": "avatar_006",
+  "name": "avatar_006",
+  "bank_dir": "/content/output/avatar_bank/avatar_006",
+  "profile_path": "/content/output/avatar_bank/avatar_006/profile.json",
+  "views": [
+    "front",
+    "left",
+    "right"
+  ],
+  "default_view": "front",
+  "assets": {
+    "front": {
+      "view": "front",
+      "image": "front.png",
+      "meta": "front_meta.npz",
+      "mask": "front_mask.png",
+      "bbox_xyxy": [
+        51.0,
+        69.0,
+        300.0,
+        319.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "front_meta_crop.png",
+      "bbox_preview": "front_meta_bbox.png"
+    },
+    "left": {
+      "view": "left",
+      "image": "left.png",
+      "meta": "left_meta.npz",
+      "mask": "left_mask.png",
+      "bbox_xyxy": [
+        159.0,
+        373.0,
+        1540.0,
+        1754.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "left_meta_crop.png",
+      "bbox_preview": "left_meta_bbox.png"
+    },
+    "right": {
+      "view": "right",
+      "image": "right.png",
+      "meta": "right_meta.npz",
+      "mask": "right_mask.png",
+      "bbox_xyxy": [
+        444.0,
+        366.0,
+        1837.0,
+        1760.0
+      ],
+      "crop_size": 256,
+      "point_count": 68,
+      "source_points_shape": [
+        68,
+        2
+      ],
+      "source_coeff_shape": [
+        264
+      ],
+      "crop_preview": "right_meta_crop.png",
+      "bbox_preview": "right_meta_bbox.png"
+    }
+  }
+}
