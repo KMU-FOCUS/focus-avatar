@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 from . import metadata_bbox_utils as overlay_helpers
-from .reenact_composite import composite_face
+from .reenact_composite import build_debug_face_mask, composite_face
 from .reenact_restore import load_gpen_keyframe_restorer
 from .reenact_keyframe_cache import (
     build_frame_plans,
@@ -43,6 +43,49 @@ FACEMAP_ASSET_PATHS = {
     "shapeBasis.npy": REPO_ROOT / "shared" / "facemap_assets" / "shapeBasis.npy",
     "blendShape.npy": REPO_ROOT / "shared" / "facemap_assets" / "blendShape.npy",
 }
+
+
+def crop_points_to_image_landmarks(
+    crop_points: np.ndarray,
+    bbox_xyxy: tuple[float, float, float, float] | list[float],
+    *,
+    crop_size: int = 256,
+) -> np.ndarray:
+    # 디버그 코드:
+    # - warp용 crop_points를 다시 이미지 좌표로 되돌려,
+    #   출력 영상 위에 landmark 점을 확인할 때만 쓴다.
+    x1, y1, x2, y2 = map(float, bbox_xyxy[:4])
+    width = max(x2 - x1, 1e-6)
+    height = max(y2 - y1, 1e-6)
+    points = np.asarray(crop_points, dtype=np.float32).reshape(-1, 2).copy()
+    points[:, 0] = points[:, 0] / float(crop_size) * width + x1
+    points[:, 1] = points[:, 1] / float(crop_size) * height + y1
+    return points
+
+
+def overlay_debug_mask(
+    frame_bgr: np.ndarray,
+    bbox_xyxy: tuple[int, int, int, int],
+    mask_uint8: np.ndarray,
+    *,
+    alpha: float,
+) -> None:
+    # 디버그 코드:
+    # - 최종 합성에 실제로 쓰인 mask를 반투명 overlay로 보여주는 전용 함수다.
+    # - 결과 분석용이므로, 제거해도 합성 파이프라인의 품질 로직에는 영향이 없다.
+    x1, y1, x2, y2 = bbox_xyxy
+    roi = frame_bgr[y1:y2, x1:x2]
+    if roi.size == 0:
+        return
+    alpha_value = max(0.0, min(1.0, float(alpha)))
+    overlay = roi.copy()
+    overlay[..., 2] = np.maximum(overlay[..., 2], mask_uint8)
+    blended = cv2.addWeighted(overlay, alpha_value, roi, 1.0 - alpha_value, 0.0)
+    roi[:] = blended
+
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        cv2.drawContours(roi, contours, -1, (0, 255, 255), thickness=1, lineType=cv2.LINE_AA)
 
 
 def should_process_frame_index(frame_index: int, frame_step: int) -> bool:
@@ -437,6 +480,9 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                 )
 
                 # draw_bbox는 디버깅용 시각화라, 필요할 때만 overlay를 그린다.
+                # 디버그 코드:
+                # - 아래 draw_* 블록들은 출력 프레임 위에 진단용 overlay만 더한다.
+                # - 실제 warp/composite 결과 자체는 이 옵션들과 무관하게 이미 계산돼 있다.
                 if args.draw_bbox:
                     overlay_helpers.draw_bbox_overlay(
                         frame_bgr,
@@ -445,6 +491,31 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
                         line_thickness=args.line_thickness,
                         hide_labels=args.hide_labels,
                     )
+                if args.draw_landmarks:
+                    landmarks_image_xy = crop_points_to_image_landmarks(
+                        warped.crop_points,
+                        plan.bbox_xyxy,
+                    )
+                    overlay_helpers.draw_landmarks(
+                        frame_bgr,
+                        landmarks_image_xy,
+                        radius=int(args.landmark_radius),
+                        color=(40, 170, 255),
+                    )
+                if args.draw_mask:
+                    debug_bbox, debug_mask = build_debug_face_mask(
+                        frame_bgr.shape,
+                        plan.bbox_xyxy,
+                        warped.crop_points,
+                        face_mask_override=warped.mask_uint8,
+                    )
+                    if debug_bbox is not None and debug_mask is not None:
+                        overlay_debug_mask(
+                            frame_bgr,
+                            debug_bbox,
+                            debug_mask,
+                            alpha=float(args.mask_alpha),
+                        )
                 frames_composited += 1
 
             # 현재 출력 프레임 1장을 비디오 파일에 기록

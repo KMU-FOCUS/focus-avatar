@@ -16,11 +16,16 @@ from .reenact_assets_runtime import CROP_SIZE
 
 DEFAULT_CLONE_MODE = "alpha"
 DEFAULT_ALPHA = 1.0
+
+# 실제 품질 변경:
+# - 아래 값들은 최종 얼굴 마스크의 모양과 블렌딩 감도를 바꾸는 파라미터다.
+# - 특히 DEFAULT_MASK_SCALE_Y는 가로는 유지한 채 세로 길이만 줄이는 현재 튜닝값이다.
 DEFAULT_FEATHER_PX = 36
 DEFAULT_MASK_EXPAND_PX = 6
 DEFAULT_MASK_GAMMA = 1.1
+DEFAULT_MASK_SCALE_Y = 0.85
 DEFAULT_COLOR_MATCH = "lab"
-DEFAULT_COLOR_MATCH_STRENGTH = 0.45
+DEFAULT_COLOR_MATCH_STRENGTH = 0.6
 DEFAULT_COLOR_MATCH_EXPAND_PX = 4
 DEFAULT_COLOR_MATCH_DOWNSAMPLE = 1
 DEFAULT_OVERRIDE_MASK_BLUR_KSIZE = 15
@@ -28,6 +33,21 @@ DEFAULT_OVERRIDE_MASK_BLUR_KSIZE = 15
 
 def _odd_kernel_size(radius_px: int) -> int:
     return max(1, int(radius_px) * 2 + 1)
+
+
+def _scale_mask_points(
+    points: np.ndarray,
+    *,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    size: int = CROP_SIZE,
+) -> np.ndarray:
+    scaled = np.asarray(points, dtype=np.float32).reshape(-1, 2).copy()
+    center_x = 0.5 * float(size)
+    center_y = 0.5 * float(size)
+    scaled[:, 0] = (scaled[:, 0] - center_x) * float(scale_x) + center_x
+    scaled[:, 1] = (scaled[:, 1] - center_y) * float(scale_y) + center_y
+    return scaled
 
 
 def apply_affine(
@@ -159,13 +179,15 @@ def build_face_mask(
     feather_px: int = 24,
     expand_px: int = 0,
     center_gamma: float = 0.8,
+    scale_y: float = DEFAULT_MASK_SCALE_Y,
 ) -> np.ndarray:
     # destination landmark hull로부터 부드러운 alpha mask를 만든다.
     # feather와 expand 값으로 이마/헤어라인을 얼마나 포함할지 조절한다.
     # 여기서 만들어지는 mask는 "어디를 얼굴로 볼 것인가"를 정의하는 핵심이다.
     # seam이 보이거나 얼굴 외곽이 딱 잘려 보이면 이 함수의 영향이 크다.
     mask = np.zeros((size, size), dtype=np.uint8)
-    hull = cv2.convexHull(np.asarray(points, dtype=np.int32))
+    scaled_points = _scale_mask_points(points, scale_y=scale_y, size=size)
+    hull = cv2.convexHull(np.asarray(scaled_points, dtype=np.int32))
     cv2.fillConvexPoly(mask, hull, 255)
 
     # expand_px는 convex hull을 바깥으로 조금 확장해
@@ -440,3 +462,52 @@ def composite_face(
         alpha=alpha,
     )
     return frame_bgr
+
+
+def build_debug_face_mask(
+    frame_shape: Sequence[int],
+    bbox_xyxy: Sequence[float],
+    crop_points: np.ndarray,
+    *,
+    face_mask_override: np.ndarray | None,
+    feather_px: int = DEFAULT_FEATHER_PX,
+    mask_expand_px: int = DEFAULT_MASK_EXPAND_PX,
+    mask_gamma: float = DEFAULT_MASK_GAMMA,
+) -> tuple[tuple[int, int, int, int] | None, np.ndarray | None]:
+    # 디버그 코드:
+    # - 실제 합성 결과를 바꾸려는 함수가 아니라,
+    #   composite 단계에서 쓰이는 최종 마스크를 화면에 시각화할 때만 사용한다.
+    # - 문제 분석이 끝나면 제거하거나 비활성화해도 런타임 결과에는 영향이 없다.
+    frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
+    clipped = overlay_helpers.clamp_box(
+        tuple(int(round(v)) for v in bbox_xyxy[:4]),
+        frame_w,
+        frame_h,
+    )
+    if clipped is None:
+        return None, None
+
+    x1, y1, x2, y2 = clipped
+    w = x2 - x1
+    h = y2 - y1
+    if w <= 0 or h <= 0:
+        return None, None
+
+    resized_mask = cv2.resize(
+        build_face_mask(
+            crop_points,
+            feather_px=feather_px,
+            expand_px=mask_expand_px,
+            center_gamma=mask_gamma,
+        ),
+        (w, h),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    if face_mask_override is not None:
+        resized_mask = _apply_face_mask_override(
+            resized_mask,
+            face_mask_override,
+            width=w,
+            height=h,
+        )
+    return clipped, resized_mask

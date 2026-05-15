@@ -29,9 +29,14 @@ def parse_args() -> argparse.Namespace:
     # - avatar-random-seed: 여러 avatar bank를 쓸 때 배정 순서를 고정
     parser.add_argument("--avatar-random-seed", type=int, default=0)
 
-    # bbox 미세조정
-    # - 디버깅용 bbox 표시
+    # 디버그 시각화 옵션
+    # - 실제 합성 품질에는 영향을 주지 않고,
+    #   bbox/landmark/mask가 어디에 그려지는지 눈으로 확인할 때만 사용한다.
     parser.add_argument("--draw-bbox", action="store_true")
+    parser.add_argument("--draw-landmarks", action="store_true")
+    parser.add_argument("--landmark-radius", type=int, default=2)
+    parser.add_argument("--draw-mask", action="store_true")
+    parser.add_argument("--mask-alpha", type=float, default=0.35)
     parser.add_argument("--hide-labels", action="store_true")
     parser.add_argument("--line-thickness", type=int, default=3)
 
