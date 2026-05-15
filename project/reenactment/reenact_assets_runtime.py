@@ -125,6 +125,9 @@ def load_avatar_profile_by_id(
 
 def select_avatar_view(profile: Mapping[str, Any], yaw_radians: float) -> str:
     # driving frame의 yaw를 기준으로 front/left/right 중 어떤 source view를 쓸지 고른다.
+    # 실제 품질 변경:
+    # - side view로 너무 빨리 넘어가지 않도록 yaw threshold를 높여 둔 상태다.
+    # - 이 기준은 avatar source view 선택에 직접 영향을 주므로 합성 품질 파라미터로 본다.
     assets = profile.get("assets")
     if not isinstance(assets, Mapping) or not assets:
         raise RuntimeError("Avatar profile is missing an 'assets' object.")

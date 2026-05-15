@@ -10,7 +10,6 @@ import numpy as np
 
 from shared.converters.coeffs_to_landmark import reconstruct_qualcomm_68_landmarks
 
-
 from . import metadata_bbox_utils as overlay_helpers
 from .reenact_composite import warp_face
 from .reenact_face_planner import (
@@ -32,23 +31,25 @@ from .reenact_assets_runtime import (
 # 3. 렌더링 단계에서는 미리 만든 keyframe cache를 재사용하고, 필요한 경우 이전 keyframe과 현재 keyframe을 보간한다.
 # 이렇게 나누면 무거운 face warp 계산을 줄이면서도 프레임별 얼굴 위치와 avatar 선택을 안정적으로 유지할 수 있다.
 
-DEFAULT_BBOX_SCALE_X = 1.06
-DEFAULT_BBOX_SCALE_Y = 1.06
-DEFAULT_BBOX_SHIFT_X = 4
-DEFAULT_BBOX_SHIFT_Y = 0
+# 실제 품질 변경:
+# - bbox 위치/크기 보정은 최종 얼굴이 어디에 붙는지 직접 바꾸는 값이다.
+# - 이 블록은 디버그용 표시가 아니라 실제 합성 결과를 조정하는 런타임 파라미터다.
+DEFAULT_BBOX_SCALE_X = 1
+DEFAULT_BBOX_SCALE_Y = 1
+DEFAULT_BBOX_SHIFT_X = 1
+DEFAULT_BBOX_SHIFT_Y = 5
 DEFAULT_BBOX_SMOOTH_FACTOR = 0.65
 
+# 실제 품질 변경:
+# - overlay 디버그에서 테스트한 landmark fitting 비율을 reenact warp 쪽에 적용한 값이다.
+# - bbox 안에서 landmark가 어느 비율로 배치되는지 바뀌므로 최종 워프 결과에 직접 영향이 있다.
 DEFAULT_PAD_LEFT = 0.08
 DEFAULT_PAD_RIGHT = 0.06
 DEFAULT_PAD_TOP = 0.16
 DEFAULT_PAD_BOTTOM = 0.04
 
-
 @dataclass(frozen=True)
 class FrameFacePlan:
-    # 한 프레임에서 한 얼굴을 어떻게 처리할지 기록한 "계획표" 한 줄이다.
-    # 여기에는 실제 합성된 얼굴 이미지가 들어가지 않는다.
-    # 대신 keyframe 계산에 필요한 원본 정보만 저장한다.
     # - frame_index: 원본 비디오 기준 프레임 번호
     # - face_key: 같은 사람/같은 slot을 계속 추적하기 위한 내부 key
     # - tracking_id: metadata에 tracking_id가 있을 때의 실제 추적 번호
