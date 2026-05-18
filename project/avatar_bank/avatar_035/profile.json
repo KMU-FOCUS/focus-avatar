@@ -1,0 +1,35 @@
+{
+  "avatar_id": "35",
+  "name": "35",
+  "views": [
+    "front",
+    "left",
+    "right"
+  ],
+  "default_view": "front",
+  "view_select": {
+    "front_yaw_range": [
+      -25.0,
+      25.0
+    ],
+    "left_yaw_min": 25.0,
+    "right_yaw_max": -25.0
+  },
+  "assets": {
+    "front": {
+      "image": "front.png",
+      "meta": "front_meta.npz",
+      "mask": "front_mask.png"
+    },
+    "left": {
+      "image": "left.png",
+      "meta": "left_meta.npz",
+      "mask": "left_mask.png"
+    },
+    "right": {
+      "image": "right.png",
+      "meta": "right_meta.npz",
+      "mask": "right_mask.png"
+    }
+  }
+}
