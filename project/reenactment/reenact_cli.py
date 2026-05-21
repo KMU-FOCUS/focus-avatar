@@ -51,17 +51,17 @@ def _resolve_run_mode(
         return RUN_MODE_LIVE
 
     if not sys.stdin.isatty():
-        return RUN_MODE_FILE
+        return RUN_MODE_LIVE
 
     print("Choose reenact mode:")
-    print(f"  1) {RUN_MODE_FILE}  - metadata/video 전체를 받아 keyframe 기반으로 처리")
-    print(f"  2) {RUN_MODE_LIVE}  - metadata를 프레임마다 바로 반영하는 live 처리")
+    print(f"  1) {RUN_MODE_LIVE}  - metadata를 프레임마다 바로 반영하는 live 처리")
+    print(f"  2) {RUN_MODE_FILE}  - metadata/video 전체를 받아 keyframe 기반으로 처리")
     while True:
         choice = input("Enter 1 or 2 [default: 1]: ").strip().lower()
-        if choice in {"", "1", RUN_MODE_FILE, "f"}:
-            return RUN_MODE_FILE
-        if choice in {"2", RUN_MODE_LIVE, "l"}:
+        if choice in {"", "1", RUN_MODE_LIVE, "l"}:
             return RUN_MODE_LIVE
+        if choice in {"2", RUN_MODE_FILE, "f"}:
+            return RUN_MODE_FILE
         print("Please enter 1 or 2.")
 
 
@@ -71,8 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run-mode",
         choices=(RUN_MODE_PROMPT, RUN_MODE_FILE, RUN_MODE_LIVE),
-        default=RUN_MODE_PROMPT,
-        help="Choose file pipeline or frame-by-frame live pipeline. Default prompts in TTY and falls back to file.",
+        default=RUN_MODE_LIVE,
+        help="Choose file pipeline or frame-by-frame live pipeline. Default is live; use prompt or file when needed.",
     )
 
     # 입출력 파일

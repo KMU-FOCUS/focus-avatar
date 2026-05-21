@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import base64
+import bisect
 import random
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -126,28 +127,22 @@ class LiveStreamPacket:
 class LatestPacketBuffer:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._latest_packet: LiveStreamPacket | None = None
+        self._queued_packets: list[LiveStreamPacket] = []
         self._closed = False
-        self._dropped_since_last_get = 0
 
     def put(self, packet: LiveStreamPacket) -> None:
         with self._condition:
-            if self._latest_packet is not None:
-                self._dropped_since_last_get += 1
-            self._latest_packet = packet
+            self._queued_packets.append(packet)
             self._condition.notify()
 
     def get(self) -> tuple[LiveStreamPacket | None, int]:
         with self._condition:
-            while self._latest_packet is None and not self._closed:
+            while not self._queued_packets and not self._closed:
                 self._condition.wait()
-            if self._latest_packet is None:
+            if not self._queued_packets:
                 return None, 0
-            packet = self._latest_packet
-            dropped = self._dropped_since_last_get
-            self._latest_packet = None
-            self._dropped_since_last_get = 0
-            return packet, dropped
+            packet = self._queued_packets.pop(0)
+            return packet, 0
 
     def close(self) -> None:
         with self._condition:
@@ -235,6 +230,68 @@ def _iter_live_metadata_packets(
             yield item
 
     return iter_from_bundle(), len(raw_frames)
+
+
+def _load_bundle_metadata_frames(metadata_arg: str) -> list[Mapping[str, Any]]:
+    metadata_path = Path(metadata_arg).expanduser().resolve()
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("Expected metadata JSON object with a top-level 'frames' array.")
+    raw_frames = payload.get("frames")
+    if not isinstance(raw_frames, list):
+        raise ValueError("Expected metadata JSON with a top-level 'frames' array.")
+
+    frames: list[Mapping[str, Any]] = []
+    for frame_index, item in enumerate(raw_frames):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"Expected metadata frame object at index {frame_index}, got {type(item).__name__}."
+            )
+        frames.append(item)
+    return frames
+
+
+def _build_metadata_pts_index(
+    raw_frames: list[Mapping[str, Any]],
+) -> tuple[list[int], list[Mapping[str, Any]]]:
+    pts_values: list[int] = []
+    frames_with_pts: list[Mapping[str, Any]] = []
+    for frame in raw_frames:
+        pts_us = frame.get("pts_us")
+        if pts_us is None:
+            continue
+        try:
+            pts_values.append(int(pts_us))
+            frames_with_pts.append(frame)
+        except (TypeError, ValueError):
+            continue
+    return pts_values, frames_with_pts
+
+
+def _match_metadata_frame_by_pts(
+    *,
+    video_pts_us: int,
+    metadata_pts_us: list[int],
+    metadata_frames_with_pts: list[Mapping[str, Any]],
+    match_threshold_us: int,
+) -> Mapping[str, Any]:
+    if not metadata_pts_us:
+        return {}
+
+    position = bisect.bisect_left(metadata_pts_us, int(video_pts_us))
+    candidate_indices: list[int] = []
+    if position < len(metadata_pts_us):
+        candidate_indices.append(position)
+    if position > 0:
+        candidate_indices.append(position - 1)
+    if not candidate_indices:
+        return {}
+
+    best_index = min(candidate_indices, key=lambda idx: abs(metadata_pts_us[idx] - int(video_pts_us)))
+    best_gap = abs(metadata_pts_us[best_index] - int(video_pts_us))
+    if best_gap > max(0, int(match_threshold_us)):
+        return {}
+    return metadata_frames_with_pts[best_index]
 
 
 def _build_live_config_from_args(args: argparse.Namespace) -> LiveReenactConfig:
@@ -694,11 +751,27 @@ class LiveReenactRenderer:
 
 
 def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
-    metadata_packets, metadata_frames_total = _iter_live_metadata_packets(
+    resolved_metadata_input_mode = _resolve_live_metadata_input_mode(
         str(args.metadata),
         str(args.metadata_input_mode),
     )
-    metadata_packet_iter = iter(metadata_packets)
+    metadata_packets: Iterator[Mapping[str, Any]] | None = None
+    metadata_packet_iter: Iterator[Mapping[str, Any]] | None = None
+    metadata_frames_total: int | None = None
+    bundle_metadata_frames: list[Mapping[str, Any]] | None = None
+    metadata_pts_us: list[int] = []
+    metadata_frames_with_pts: list[Mapping[str, Any]] = []
+
+    if resolved_metadata_input_mode == LIVE_METADATA_INPUT_MODE_BUNDLE_JSON:
+        bundle_metadata_frames = _load_bundle_metadata_frames(str(args.metadata))
+        metadata_frames_total = len(bundle_metadata_frames)
+        metadata_pts_us, metadata_frames_with_pts = _build_metadata_pts_index(bundle_metadata_frames)
+    else:
+        metadata_packets, metadata_frames_total = _iter_live_metadata_packets(
+            str(args.metadata),
+            str(args.metadata_input_mode),
+        )
+        metadata_packet_iter = iter(metadata_packets)
 
     config = _build_live_config_from_args(args)
     renderer = _build_live_renderer_from_args(args, config=config)
@@ -731,6 +804,8 @@ def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
             raise RuntimeError(f"Failed to open video: {args.video}")
 
         input_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_duration_us = int(round(1_000_000.0 / max(float(input_fps), 1e-6)))
+        match_threshold_us = frame_duration_us
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         writer = cv2.VideoWriter(
@@ -747,15 +822,28 @@ def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
             ok, frame_bgr = cap.read()
             if not ok:
                 break
-            try:
-                metadata_packet = next(metadata_packet_iter)
-            except StopIteration:
-                break
+
+            if bundle_metadata_frames is not None:
+                video_pts_us = int(round((cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) * 1000.0))
+                metadata_packet = _match_metadata_frame_by_pts(
+                    video_pts_us=video_pts_us,
+                    metadata_pts_us=metadata_pts_us,
+                    metadata_frames_with_pts=metadata_frames_with_pts,
+                    match_threshold_us=match_threshold_us,
+                )
+            else:
+                try:
+                    metadata_packet = next(metadata_packet_iter) if metadata_packet_iter is not None else {}
+                except StopIteration:
+                    metadata_packet = {}
 
             output_frame = renderer.process_frame(frame_bgr, metadata_packet)
             writer.write(output_frame)
             frames_rendered += 1
-            metadata_frames_used += 1
+            if isinstance(metadata_packet, Mapping) and (
+                isinstance(metadata_packet.get("faces"), list) or isinstance(metadata_packet.get("frames"), list)
+            ):
+                metadata_frames_used += 1
             frame_index += 1
     finally:
         if cap is not None:
