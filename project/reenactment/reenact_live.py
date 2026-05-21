@@ -6,12 +6,15 @@ from __future__ import annotations
 # tracking_id 기준 상태를 유지하면서 합성 결과를 반환한다.
 
 from dataclasses import dataclass, field
+import base64
 import random
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 import argparse
 import json
+import sys
 import tempfile
+import threading
 
 import cv2
 import numpy as np
@@ -33,6 +36,15 @@ from .reenact_restore import load_gpen_keyframe_restorer
 
 LIVE_TARGET_INPUT_MODE_FULL_FRAME = "full_frame"
 LIVE_TARGET_INPUT_MODE_METADATA_CROP = "metadata_crop"
+LIVE_SOURCE_MODE_VIDEO_FILE = "video_file"
+LIVE_SOURCE_MODE_STREAM_PAIRS = "stream_pairs"
+LIVE_METADATA_INPUT_MODE_AUTO = "auto"
+LIVE_METADATA_INPUT_MODE_BUNDLE_JSON = "bundle_json"
+LIVE_METADATA_INPUT_MODE_JSONL = "jsonl"
+LIVE_METADATA_INPUT_MODE_STDIN_JSONL = "stdin_jsonl"
+LIVE_STREAM_OUTPUT_MODE_STDOUT_JSONL = "stdout_jsonl"
+LIVE_STREAM_IMAGE_FORMAT_JPEG = "jpeg"
+LIVE_STREAM_IMAGE_FORMAT_PNG = "png"
 
 
 @dataclass(slots=True)
@@ -103,6 +115,335 @@ class LiveFaceState:
     last_frame_index: int = -1
     last_pts_us: int | None = None
     refresh_count: int = 0
+
+
+@dataclass(slots=True)
+class LiveStreamPacket:
+    sequence_id: int
+    payload: Mapping[str, Any]
+
+
+class LatestPacketBuffer:
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._latest_packet: LiveStreamPacket | None = None
+        self._closed = False
+        self._dropped_since_last_get = 0
+
+    def put(self, packet: LiveStreamPacket) -> None:
+        with self._condition:
+            if self._latest_packet is not None:
+                self._dropped_since_last_get += 1
+            self._latest_packet = packet
+            self._condition.notify()
+
+    def get(self) -> tuple[LiveStreamPacket | None, int]:
+        with self._condition:
+            while self._latest_packet is None and not self._closed:
+                self._condition.wait()
+            if self._latest_packet is None:
+                return None, 0
+            packet = self._latest_packet
+            dropped = self._dropped_since_last_get
+            self._latest_packet = None
+            self._dropped_since_last_get = 0
+            return packet, dropped
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+
+def _resolve_live_metadata_input_mode(
+    metadata_arg: str,
+    metadata_input_mode: str,
+) -> str:
+    normalized = str(metadata_input_mode).strip().lower()
+    if normalized == LIVE_METADATA_INPUT_MODE_AUTO:
+        if metadata_arg.strip() == "-":
+            return LIVE_METADATA_INPUT_MODE_STDIN_JSONL
+        suffix = Path(metadata_arg).suffix.lower()
+        if suffix in {".jsonl", ".ndjson"}:
+            return LIVE_METADATA_INPUT_MODE_JSONL
+        return LIVE_METADATA_INPUT_MODE_BUNDLE_JSON
+    if normalized in {
+        LIVE_METADATA_INPUT_MODE_BUNDLE_JSON,
+        LIVE_METADATA_INPUT_MODE_JSONL,
+        LIVE_METADATA_INPUT_MODE_STDIN_JSONL,
+    }:
+        return normalized
+    raise ValueError(f"Unsupported metadata_input_mode: {metadata_input_mode}")
+
+
+def _iter_jsonl_metadata_packets(
+    lines: Iterator[str],
+    *,
+    source_label: str,
+) -> Iterator[Mapping[str, Any]]:
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON in {source_label} at line {line_number}: {exc}"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError(
+                f"Expected a JSON object per line in {source_label}, got {type(payload).__name__} "
+                f"at line {line_number}."
+            )
+        yield payload
+
+
+def _iter_live_metadata_packets(
+    metadata_arg: str,
+    metadata_input_mode: str,
+) -> tuple[Iterator[Mapping[str, Any]], int | None]:
+    resolved_mode = _resolve_live_metadata_input_mode(metadata_arg, metadata_input_mode)
+
+    if resolved_mode == LIVE_METADATA_INPUT_MODE_STDIN_JSONL:
+        return (
+            _iter_jsonl_metadata_packets(iter(sys.stdin.readline, ""), source_label="stdin"),
+            None,
+        )
+
+    metadata_path = Path(metadata_arg).expanduser().resolve()
+    if resolved_mode == LIVE_METADATA_INPUT_MODE_JSONL:
+        def iter_from_jsonl_file() -> Iterator[Mapping[str, Any]]:
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                yield from _iter_jsonl_metadata_packets(handle, source_label=str(metadata_path))
+
+        return iter_from_jsonl_file(), None
+
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("Expected metadata JSON object with a top-level 'frames' array.")
+    raw_frames = payload.get("frames")
+    if not isinstance(raw_frames, list):
+        raise ValueError("Expected metadata JSON with a top-level 'frames' array.")
+
+    def iter_from_bundle() -> Iterator[Mapping[str, Any]]:
+        for frame_index, item in enumerate(raw_frames):
+            if not isinstance(item, Mapping):
+                raise ValueError(
+                    f"Expected metadata frame object at index {frame_index}, got {type(item).__name__}."
+                )
+            yield item
+
+    return iter_from_bundle(), len(raw_frames)
+
+
+def _build_live_config_from_args(args: argparse.Namespace) -> LiveReenactConfig:
+    return LiveReenactConfig(
+        target_input_mode=str(args.target_input_mode),
+        metadata_crop_scale=float(args.metadata_crop_scale),
+        output_bbox_scale_x=float(args.output_bbox_scale_x),
+        output_bbox_scale_y=float(args.output_bbox_scale_y),
+        refresh_every_frames=int(args.refresh_every_frames),
+        delete_missing_tracks_immediately=not bool(args.keep_missing_tracks),
+        use_face_mask_override=bool(args.use_face_mask_override),
+        draw_bbox=bool(args.draw_bbox),
+        line_thickness=int(args.line_thickness),
+        hide_labels=bool(args.hide_labels),
+        key_restorer_every=int(args.key_restorer_every),
+        key_restorer_mask_expand_px=int(args.key_restorer_mask_expand_px),
+        key_restorer_feather_px=int(args.key_restorer_feather_px),
+    )
+
+
+def _build_live_renderer_from_args(
+    args: argparse.Namespace,
+    *,
+    config: LiveReenactConfig,
+) -> LiveReenactRenderer:
+    return LiveReenactRenderer(
+        avatar_bank_dir=[str(path) for path in args.avatar_bank_dir],
+        avatar_random_seed=int(args.avatar_random_seed),
+        config=config,
+        gpen_model=args.gpen_model,
+        gpen_provider=str(args.gpen_provider),
+        gpen_input_size=int(args.gpen_input_size),
+    )
+
+
+def _decode_stream_frame_image(encoded_text: str) -> np.ndarray:
+    encoded_bytes = base64.b64decode(encoded_text.encode("ascii"))
+    image_buffer = np.frombuffer(encoded_bytes, dtype=np.uint8)
+    frame_bgr = cv2.imdecode(image_buffer, cv2.IMREAD_COLOR)
+    if frame_bgr is None:
+        raise ValueError("Failed to decode stream frame image.")
+    return frame_bgr
+
+
+def _extract_stream_frame_bgr(packet: Mapping[str, Any]) -> np.ndarray:
+    frame_info = packet.get("frame")
+    sources: list[Mapping[str, Any]] = []
+    if isinstance(frame_info, Mapping):
+        sources.append(frame_info)
+    sources.append(packet)
+
+    for source in sources:
+        frame_path = source.get("path") if source is frame_info else source.get("frame_path")
+        if isinstance(frame_path, str) and frame_path:
+            frame_bgr = cv2.imread(str(Path(frame_path).expanduser().resolve()), cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                raise ValueError(f"Failed to read stream frame image from path: {frame_path}")
+            return frame_bgr
+
+        for key in (
+            "jpeg_base64",
+            "png_base64",
+            "image_base64",
+        ) if source is frame_info else (
+            "frame_jpeg_base64",
+            "frame_png_base64",
+            "frame_image_base64",
+            "image_base64",
+        ):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return _decode_stream_frame_image(value)
+
+    raise ValueError(
+        "Stream packet is missing frame image data. Pass frame_path, frame_jpeg_base64, frame_png_base64, "
+        "or frame.image_base64."
+    )
+
+
+def _extract_stream_metadata_packet(packet: Mapping[str, Any]) -> Mapping[str, Any]:
+    for key in ("metadata", "metadata_packet", "frame_metadata"):
+        value = packet.get(key)
+        if isinstance(value, Mapping):
+            metadata_packet = dict(value)
+            if "pts_us" not in metadata_packet and packet.get("pts_us") is not None:
+                metadata_packet["pts_us"] = packet.get("pts_us")
+            return metadata_packet
+    if isinstance(packet.get("faces"), list) or isinstance(packet.get("frames"), list):
+        return packet
+    raise ValueError("Stream packet is missing metadata object.")
+
+
+def _encode_output_frame_bgr(
+    frame_bgr: np.ndarray,
+    *,
+    image_format: str,
+    jpeg_quality: int,
+) -> tuple[str, str]:
+    normalized_format = str(image_format).strip().lower()
+    if normalized_format == LIVE_STREAM_IMAGE_FORMAT_PNG:
+        ok, encoded = cv2.imencode(".png", frame_bgr)
+        if not ok:
+            raise RuntimeError("Failed to encode output frame as PNG.")
+        return base64.b64encode(encoded.tobytes()).decode("ascii"), LIVE_STREAM_IMAGE_FORMAT_PNG
+
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        frame_bgr,
+        [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, int(jpeg_quality)))],
+    )
+    if not ok:
+        raise RuntimeError("Failed to encode output frame as JPEG.")
+    return base64.b64encode(encoded.tobytes()).decode("ascii"), LIVE_STREAM_IMAGE_FORMAT_JPEG
+
+
+def _emit_stream_result_packet(
+    *,
+    input_packet: LiveStreamPacket,
+    output_frame_bgr: np.ndarray,
+    dropped_inputs_while_busy: int,
+    output_image_format: str,
+    output_jpeg_quality: int,
+) -> None:
+    metadata_packet = _extract_stream_metadata_packet(input_packet.payload)
+    encoded_frame, resolved_image_format = _encode_output_frame_bgr(
+        output_frame_bgr,
+        image_format=output_image_format,
+        jpeg_quality=output_jpeg_quality,
+    )
+    result_packet = {
+        "type": "frame_result",
+        "sequence_id": int(input_packet.sequence_id),
+        "source_packet_id": input_packet.payload.get("packet_id"),
+        "pts_us": metadata_packet.get("pts_us"),
+        "dropped_inputs_while_busy": int(dropped_inputs_while_busy),
+        "image_format": resolved_image_format,
+        "frame_image_base64": encoded_frame,
+    }
+    sys.stdout.write(json.dumps(result_packet, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def run_live_reenact_stream_pipeline(args: argparse.Namespace) -> None:
+    if str(args.stream_output_mode) != LIVE_STREAM_OUTPUT_MODE_STDOUT_JSONL:
+        raise ValueError("Only stdout_jsonl stream output mode is currently supported.")
+
+    config = _build_live_config_from_args(args)
+    renderer = _build_live_renderer_from_args(args, config=config)
+    packet_buffer = LatestPacketBuffer()
+    worker_error: list[BaseException] = []
+    processed_count_holder = {"processed": 0}
+    dropped_input_holder = {"dropped": 0}
+
+    def worker_loop() -> None:
+        try:
+            while True:
+                stream_packet, dropped_inputs = packet_buffer.get()
+                if stream_packet is None:
+                    break
+                frame_bgr = _extract_stream_frame_bgr(stream_packet.payload)
+                metadata_packet = _extract_stream_metadata_packet(stream_packet.payload)
+                output_frame = renderer.process_frame(frame_bgr, metadata_packet)
+                _emit_stream_result_packet(
+                    input_packet=stream_packet,
+                    output_frame_bgr=output_frame,
+                    dropped_inputs_while_busy=dropped_inputs,
+                    output_image_format=str(args.stream_output_image_format),
+                    output_jpeg_quality=int(args.stream_output_jpeg_quality),
+                )
+                processed_count_holder["processed"] += 1
+                dropped_input_holder["dropped"] += int(dropped_inputs)
+        except BaseException as exc:  # pragma: no cover - defensive for stream shutdown paths
+            worker_error.append(exc)
+            packet_buffer.close()
+
+    worker_thread = threading.Thread(target=worker_loop, name="live-reenact-stream-worker", daemon=True)
+    worker_thread.start()
+
+    try:
+        for sequence_id, payload in enumerate(
+            _iter_jsonl_metadata_packets(iter(sys.stdin.readline, ""), source_label="stdin"),
+            start=1,
+        ):
+            packet_buffer.put(
+                LiveStreamPacket(
+                    sequence_id=sequence_id,
+                    payload=payload,
+                )
+            )
+    finally:
+        packet_buffer.close()
+        worker_thread.join()
+
+    if worker_error:
+        raise worker_error[0]
+
+    print(
+        json.dumps(
+            {
+                "type": "stream_summary",
+                "processed_frames": int(processed_count_holder["processed"]),
+                "dropped_inputs_while_busy": int(dropped_input_holder["dropped"]),
+                "gpen_load_error": renderer.gpen_load_error,
+            },
+            ensure_ascii=False,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _normalize_live_metadata_frame(metadata_packet: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -353,36 +694,14 @@ class LiveReenactRenderer:
 
 
 def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
-    metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8"))
-    if not isinstance(metadata, Mapping):
-        raise ValueError("Expected metadata JSON object with a top-level 'frames' array.")
-    raw_frames = metadata.get("frames")
-    if not isinstance(raw_frames, list):
-        raise ValueError("Expected metadata JSON with a top-level 'frames' array.")
+    metadata_packets, metadata_frames_total = _iter_live_metadata_packets(
+        str(args.metadata),
+        str(args.metadata_input_mode),
+    )
+    metadata_packet_iter = iter(metadata_packets)
 
-    config = LiveReenactConfig(
-        target_input_mode=str(args.target_input_mode),
-        metadata_crop_scale=float(args.metadata_crop_scale),
-        output_bbox_scale_x=float(args.output_bbox_scale_x),
-        output_bbox_scale_y=float(args.output_bbox_scale_y),
-        refresh_every_frames=int(args.refresh_every_frames),
-        delete_missing_tracks_immediately=not bool(args.keep_missing_tracks),
-        use_face_mask_override=bool(args.use_face_mask_override),
-        draw_bbox=bool(args.draw_bbox),
-        line_thickness=int(args.line_thickness),
-        hide_labels=bool(args.hide_labels),
-        key_restorer_every=int(args.key_restorer_every),
-        key_restorer_mask_expand_px=int(args.key_restorer_mask_expand_px),
-        key_restorer_feather_px=int(args.key_restorer_feather_px),
-    )
-    renderer = LiveReenactRenderer(
-        avatar_bank_dir=[str(path) for path in args.avatar_bank_dir],
-        avatar_random_seed=int(args.avatar_random_seed),
-        config=config,
-        gpen_model=args.gpen_model,
-        gpen_provider=str(args.gpen_provider),
-        gpen_input_size=int(args.gpen_input_size),
-    )
+    config = _build_live_config_from_args(args)
+    renderer = _build_live_renderer_from_args(args, config=config)
 
     cap: cv2.VideoCapture | None = None
     writer: cv2.VideoWriter | None = None
@@ -428,10 +747,12 @@ def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
             ok, frame_bgr = cap.read()
             if not ok:
                 break
-            if frame_index >= len(raw_frames):
+            try:
+                metadata_packet = next(metadata_packet_iter)
+            except StopIteration:
                 break
 
-            output_frame = renderer.process_frame(frame_bgr, raw_frames[frame_index])
+            output_frame = renderer.process_frame(frame_bgr, metadata_packet)
             writer.write(output_frame)
             frames_rendered += 1
             metadata_frames_used += 1
@@ -461,7 +782,7 @@ def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
             {
                 "frames_rendered": frames_rendered,
                 "metadata_frames_used": metadata_frames_used,
-                "metadata_frames_total": len(raw_frames),
+                "metadata_frames_total": metadata_frames_total,
                 "audio_remuxed": audio_remuxed,
                 "audio_remux_error": audio_remux_error,
                 "gpen_load_error": renderer.gpen_load_error,
@@ -473,11 +794,29 @@ def run_live_reenact_video_pipeline(args: argparse.Namespace) -> None:
     )
 
 
+def run_live_reenact_pipeline(args: argparse.Namespace) -> None:
+    if str(args.live_source_mode) == LIVE_SOURCE_MODE_STREAM_PAIRS:
+        run_live_reenact_stream_pipeline(args)
+        return
+    run_live_reenact_video_pipeline(args)
+
+
 __all__ = [
     "LIVE_TARGET_INPUT_MODE_FULL_FRAME",
     "LIVE_TARGET_INPUT_MODE_METADATA_CROP",
+    "LIVE_SOURCE_MODE_VIDEO_FILE",
+    "LIVE_SOURCE_MODE_STREAM_PAIRS",
+    "LIVE_METADATA_INPUT_MODE_AUTO",
+    "LIVE_METADATA_INPUT_MODE_BUNDLE_JSON",
+    "LIVE_METADATA_INPUT_MODE_JSONL",
+    "LIVE_METADATA_INPUT_MODE_STDIN_JSONL",
+    "LIVE_STREAM_OUTPUT_MODE_STDOUT_JSONL",
+    "LIVE_STREAM_IMAGE_FORMAT_JPEG",
+    "LIVE_STREAM_IMAGE_FORMAT_PNG",
     "LiveFaceState",
     "LiveReenactConfig",
     "LiveReenactRenderer",
+    "run_live_reenact_pipeline",
+    "run_live_reenact_stream_pipeline",
     "run_live_reenact_video_pipeline",
 ]
