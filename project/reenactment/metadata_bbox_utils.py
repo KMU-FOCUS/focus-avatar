@@ -40,15 +40,19 @@ def bbox_to_xyxy(bbox: Mapping[str, Any] | None) -> tuple[int, int, int, int] | 
     return x, y, x + width, y + height
 
 
-def clamp_box(box: tuple[int, int, int, int], frame_w: int, frame_h: int) -> tuple[int, int, int, int] | None:
+def clamp_box(
+    box: tuple[int, int, int, int] | tuple[float, float, float, float],
+    frame_w: int,
+    frame_h: int,
+) -> tuple[int, int, int, int] | None:
     # bbox가 영상 프레임 밖으로 나가는 경우를 막기 위해 좌표를 프레임 범위 안으로 자른다.
     # 예를 들어 얼굴이 화면 가장자리에 있으면 x1/y1/x2/y2 일부가 음수거나 프레임 크기를 넘을 수 있다.
     # clipping 후에도 폭이나 높이가 0 이하라면 실제로 합성할 영역이 없으므로 None을 반환한다.
     x1, y1, x2, y2 = box
-    x1 = max(0, min(frame_w - 1, x1))
-    y1 = max(0, min(frame_h - 1, y1))
-    x2 = max(0, min(frame_w - 1, x2))
-    y2 = max(0, min(frame_h - 1, y2))
+    x1 = int(round(max(0, min(frame_w - 1, float(x1)))))
+    y1 = int(round(max(0, min(frame_h - 1, float(y1)))))
+    x2 = int(round(max(0, min(frame_w - 1, float(x2)))))
+    y2 = int(round(max(0, min(frame_h - 1, float(y2)))))
     if x2 <= x1 or y2 <= y1:
         return None
     return x1, y1, x2, y2

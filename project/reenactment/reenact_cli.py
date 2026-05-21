@@ -1,21 +1,56 @@
 from __future__ import annotations
 
-# keyframe 기반 reenact 실행의 CLI 진입점이다.
-# 이 파일은 "사용자가 어떤 옵션으로 실행할지"를 정의하고,
-# 실제 처리 흐름은 reenact_pipeline.py로 넘긴다.
-#
-# 파일 책임을 나누는 현재 구조:
-# - reenact_cli.py: CLI 진입점
-# - reenact_pipeline.py: 전체 실행 흐름 orchestration
-# - reenact_keyframe_cache.py: 계획표 생성, keyframe 선택, cache 계산
+# reenact 실행의 통합 CLI 진입점이다.
+# 공통 인자는 여기서 받고,
+# - file 모드면 기존 keyframe reenact 파이프라인으로
+# - live 모드면 frame-by-frame live reenact 파이프라인으로 넘긴다.
 
 import argparse
+import sys
 
+from .reenact_live import (
+    LIVE_TARGET_INPUT_MODE_FULL_FRAME,
+    LIVE_TARGET_INPUT_MODE_METADATA_CROP,
+    run_live_reenact_video_pipeline,
+)
 from .reenact_pipeline import run_keyframe_reenact_pipeline
+
+RUN_MODE_FILE = "file"
+RUN_MODE_LIVE = "live"
+RUN_MODE_PROMPT = "prompt"
+
+
+def _resolve_run_mode(run_mode: str) -> str:
+    normalized = str(run_mode).strip().lower()
+    if normalized in {RUN_MODE_FILE, RUN_MODE_LIVE}:
+        return normalized
+    if normalized != RUN_MODE_PROMPT:
+        raise ValueError(f"Unsupported run mode: {run_mode}")
+
+    if not sys.stdin.isatty():
+        return RUN_MODE_FILE
+
+    print("Choose reenact mode:")
+    print(f"  1) {RUN_MODE_FILE}  - metadata/video 전체를 받아 keyframe 기반으로 처리")
+    print(f"  2) {RUN_MODE_LIVE}  - metadata를 프레임마다 바로 반영하는 live 처리")
+    while True:
+        choice = input("Enter 1 or 2 [default: 1]: ").strip().lower()
+        if choice in {"", "1", RUN_MODE_FILE, "f"}:
+            return RUN_MODE_FILE
+        if choice in {"2", RUN_MODE_LIVE, "l"}:
+            return RUN_MODE_LIVE
+        print("Please enter 1 or 2.")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--run-mode",
+        choices=(RUN_MODE_PROMPT, RUN_MODE_FILE, RUN_MODE_LIVE),
+        default=RUN_MODE_PROMPT,
+        help="Choose file pipeline or frame-by-frame live pipeline. Default prompts in TTY and falls back to file.",
+    )
 
     # 입출력 파일
     parser.add_argument("--metadata", required=True)
@@ -49,11 +84,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--key-restorer-feather-px", type=int, default=8)
     parser.add_argument("--key-restorer-every", type=int, default=1)
 
-    return parser.parse_args()
+    # live 모드 전용 세부 옵션
+    parser.add_argument(
+        "--target-input-mode",
+        choices=(LIVE_TARGET_INPUT_MODE_FULL_FRAME, LIVE_TARGET_INPUT_MODE_METADATA_CROP),
+        default=LIVE_TARGET_INPUT_MODE_FULL_FRAME,
+    )
+    parser.add_argument("--metadata-crop-scale", type=float, default=2.0)
+    parser.add_argument("--output-bbox-scale-x", type=float, default=1.0)
+    parser.add_argument("--output-bbox-scale-y", type=float, default=1.0)
+    parser.add_argument("--refresh-every-frames", type=int, default=1)
+    parser.add_argument("--keep-missing-tracks", action="store_true")
+    parser.add_argument("--use-face-mask-override", action="store_true")
+
+    args = parser.parse_args()
+    args.run_mode = _resolve_run_mode(args.run_mode)
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    if args.run_mode == RUN_MODE_LIVE:
+        run_live_reenact_video_pipeline(args)
+        return
     run_keyframe_reenact_pipeline(args)
 
 
