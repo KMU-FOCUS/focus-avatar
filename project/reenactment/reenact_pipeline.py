@@ -273,7 +273,7 @@ def run_keyframe_reenact_pipeline(args: argparse.Namespace) -> None:
     # 프레임 설정 값
     warp_every = 1
     transition_frames = 1
-    frame_step = 1
+    frame_step = 3
 
     if warp_every < 1:
         raise RuntimeError("warp_every must be at least 1.")

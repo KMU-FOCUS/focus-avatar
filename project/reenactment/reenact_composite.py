@@ -19,11 +19,12 @@ DEFAULT_ALPHA = 1.0
 
 # 실제 품질 변경:
 # - 아래 값들은 최종 얼굴 마스크의 모양과 블렌딩 감도를 바꾸는 파라미터다.
-# - 특히 DEFAULT_MASK_SCALE_Y는 가로는 유지한 채 세로 길이만 줄이는 현재 튜닝값이다.
+# - mask 면적을 전반적으로 조금 더 줄이기 위해 가로/세로 scale을 모두 축소한다.
 DEFAULT_FEATHER_PX = 36
-DEFAULT_MASK_EXPAND_PX = 6
+DEFAULT_MASK_EXPAND_PX = 2
 DEFAULT_MASK_GAMMA = 1.1
-DEFAULT_MASK_SCALE_Y = 0.85
+DEFAULT_MASK_SCALE_X = 0.94
+DEFAULT_MASK_SCALE_Y = 0.78
 DEFAULT_COLOR_MATCH = "lab"
 DEFAULT_COLOR_MATCH_STRENGTH = 0.6
 DEFAULT_COLOR_MATCH_EXPAND_PX = 4
@@ -179,6 +180,7 @@ def build_face_mask(
     feather_px: int = 24,
     expand_px: int = 0,
     center_gamma: float = 0.8,
+    scale_x: float = DEFAULT_MASK_SCALE_X,
     scale_y: float = DEFAULT_MASK_SCALE_Y,
 ) -> np.ndarray:
     # destination landmark hull로부터 부드러운 alpha mask를 만든다.
@@ -186,7 +188,7 @@ def build_face_mask(
     # 여기서 만들어지는 mask는 "어디를 얼굴로 볼 것인가"를 정의하는 핵심이다.
     # seam이 보이거나 얼굴 외곽이 딱 잘려 보이면 이 함수의 영향이 크다.
     mask = np.zeros((size, size), dtype=np.uint8)
-    scaled_points = _scale_mask_points(points, scale_y=scale_y, size=size)
+    scaled_points = _scale_mask_points(points, scale_x=scale_x, scale_y=scale_y, size=size)
     hull = cv2.convexHull(np.asarray(scaled_points, dtype=np.int32))
     cv2.fillConvexPoly(mask, hull, 255)
 
